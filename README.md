@@ -1,6 +1,6 @@
 Interception.Implementation
 ---------------------------
-High-level implementation over Interception.net allows you to intercept, send, and cancel keystrokes from a range of devices
+High-level implementation over [Interception.net](https://github.com/Yoticc/Interception.net) allows you to intercept, send, and cancel keystrokes from a range of devices
 
 Example
 ---------------------------
