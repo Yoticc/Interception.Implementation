@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Diagnostics;
+using System.Runtime.InteropServices;
 using static Interception.InterceptionInterop;
 
 namespace Interception;
@@ -17,10 +18,8 @@ public static unsafe class InterceptionImpl
 
     static InterceptionImpl()
     {
-
-#if DEBUG
-        return;
-#endif
+        if (Debugger.IsAttached)
+            return;
 
         keyboardContext = interception_create_context();
         interception_set_filter(keyboardContext, interception_is_keyboard, Filter.All);
@@ -41,17 +40,16 @@ public static unsafe class InterceptionImpl
 
     static void DriverKeyboardUpdater()
     {
-        var stroke = stackalloc Stroke[1];
+        var stroke = stackalloc KeyStroke[1];
         while (true)
         {
             try
             {
-                while (interception_receive(keyboardContext, keyboardDeviceID = interception_wait(keyboardContext), stroke, 1) > 0)
+                while (interception_receive(keyboardContext, keyboardDeviceID = interception_wait(keyboardContext), (Stroke*)stroke, 1) > 0)
                 {
-                    var strokeKey = stroke->Key;
-                    var key = ToKey(strokeKey);
+                    var key = ToKey(stroke);
                     var processed = false;
-                    if (strokeKey.IsKeyDown)
+                    if (stroke->IsKeyDown)
                     {
                         switch (IsKeyUp(key))
                         {
@@ -71,14 +69,14 @@ public static unsafe class InterceptionImpl
                     }
 
                     if (!processed)
-                        interception_send(keyboardContext, keyboardDeviceID, stroke, 1);
+                        interception_send(keyboardContext, keyboardDeviceID, (Stroke*)stroke, 1);
                 }
             }
             catch 
             {
                 try
                 {
-                    interception_send(keyboardContext, keyboardDeviceID, stroke, 1);
+                    interception_send(keyboardContext, keyboardDeviceID, (Stroke*)stroke, 1);
                 }
                 catch { }
             }
@@ -87,17 +85,15 @@ public static unsafe class InterceptionImpl
 
     static void DriverMouseUpdater()
     {
-        var stroke = stackalloc Stroke[1];
+        var stroke = stackalloc MouseStroke[1];
         while (true)
         {
             try
             {
-                while (true)
+                while (interception_receive(mouseContext, mouseDeviceID = interception_wait(mouseContext), (Stroke*)stroke, 1) > 0)
                 {
-                    interception_receive(mouseContext, mouseDeviceID = interception_wait(mouseContext), stroke, 1);
-
                     var processed = false;
-                    switch (stroke->Mouse.State)
+                    switch (stroke->State)
                     {
                         case MouseState.LeftButtonDown:
                             IsLeftMouseDown = true;
@@ -144,22 +140,22 @@ public static unsafe class InterceptionImpl
                             processed = InternalOnKeyUp(Key.Button2);
                             break;
                         case MouseState.Wheel:
-                            processed = InternalOnMouseWheel(stroke->Mouse.Rolling);
+                            processed = InternalOnMouseWheel(stroke->Rolling);
                             break;
                         default:
-                            processed = InternalOnMouseMove(stroke->Mouse.X, stroke->Mouse.Y);
+                            processed = InternalOnMouseMove(stroke->X, stroke->Y);
                             break;
                     }
 
                     if (!processed)
-                        interception_send(mouseContext, mouseDeviceID, stroke, 1);
+                        interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
                 }
             }
             catch 
             {
                 try
                 {
-                    interception_send(mouseContext, mouseDeviceID, stroke, 1);
+                    interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
                 } catch { }
             }
         }
@@ -173,10 +169,10 @@ public static unsafe class InterceptionImpl
     static void SetKeyIsUp(Key key) => SetKeyIsUp((int)key);
     static void SetKeyIsUp(int key) => keyStates[key / 64] &= ~(1 << (key % 64));
 
-    static Key ToKey(KeyStroke keyStroke)
+    static Key ToKey(KeyStroke* keyStroke)
     {
-        var result = keyStroke.Code;
-        if ((keyStroke.State & KeyState.E0) != 0)
+        var result = keyStroke->Code;
+        if ((keyStroke->State & KeyState.E0) != 0)
             result += 0x100;
         return (Key)result;
     }
@@ -251,107 +247,95 @@ public static unsafe class InterceptionImpl
     public static void KeyUp(params Key[] keys)
     {
         foreach (var key in keys)
+            KeyUp(key);
+    }
+
+    public static void KeyUp(Key key)
+    {
+        SetKeyIsUp(key);
+        if (((short)key) < 0)
         {
-            SetKeyIsUp(key);
-            if (((short)key) < 0)
+            var stroke = stackalloc MouseStroke[1];
+            stroke->State = key switch
             {
-                var stroke = new Stroke();
-                switch (key)
-                {
-                    case Key.MouseLeft:
-                        stroke.Mouse.State = MouseState.LeftButtonUp;
-                        break;
-                    case Key.MouseRight:
-                        stroke.Mouse.State = MouseState.RightButtonUp;
-                        break;
-                    case Key.MouseMiddle:
-                        stroke.Mouse.State = MouseState.MiddleButtonUp;
-                        break;
-                    case Key.Button1:
-                        stroke.Mouse.State = MouseState.Button4Up;
-                        break;
-                    case Key.Button2:
-                        stroke.Mouse.State = MouseState.Button5Up;
-                        break;
-                }
-                interception_send(mouseContext, mouseDeviceID, &stroke, 1);
-            }
-            else
-            {
-                var stroke = new Stroke();
-                stroke.Key = ToKeyStroke(key, false);
-                interception_send(keyboardContext, keyboardDeviceID, &stroke, 1);
-            }
+                Key.MouseLeft => MouseState.LeftButtonUp,
+                Key.MouseRight => MouseState.RightButtonUp,
+                Key.MouseMiddle => MouseState.MiddleButtonUp,
+                Key.Button1 => MouseState.Button4Up,
+                Key.Button2 => MouseState.Button5Up,
+                _ => default
+            };
+
+            interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
+        }
+        else
+        {
+            var stroke = stackalloc Stroke[1];
+            stroke->Key = ToKeyStroke(key, false);
+            interception_send(keyboardContext, keyboardDeviceID, stroke, 1);
         }
     }
 
     public static void KeyDown(params Key[] keys)
     {
         foreach (var key in keys)
-        {
-            SetKeyIsDown(key);
+            KeyDown(key);
+    }
 
-            if (((short)key) < 0)
+    public static void KeyDown(Key key)
+    {
+        SetKeyIsDown(key);
+
+        if (((short)key) < 0)
+        {
+            var stroke = stackalloc MouseStroke[1];
+            stroke->State = key switch
             {
-                var stroke = new Stroke();
-                switch (key)
-                {
-                    case Key.MouseLeft:
-                        stroke.Mouse.State = MouseState.LeftButtonDown;
-                        break;
-                    case Key.MouseRight:
-                        stroke.Mouse.State = MouseState.RightButtonDown;
-                        break;
-                    case Key.MouseMiddle:
-                        stroke.Mouse.State = MouseState.MiddleButtonDown;
-                        break;
-                    case Key.Button1:
-                        stroke.Mouse.State = MouseState.Button4Down;
-                        break;
-                    case Key.Button2:
-                        stroke.Mouse.State = MouseState.Button5Down;
-                        break;
-                }
-                interception_send(mouseContext, mouseDeviceID, &stroke, 1);
-            }
-            else
-            {
-                var stroke = new Stroke();
-                stroke.Key = ToKeyStroke(key, true);
-                interception_send(keyboardContext, keyboardDeviceID, &stroke, 1);
-            }
+                Key.MouseLeft => MouseState.LeftButtonDown,
+                Key.MouseRight => MouseState.RightButtonDown,
+                Key.MouseMiddle => MouseState.MiddleButtonDown,
+                Key.Button1 => MouseState.Button4Down,
+                Key.Button2 => MouseState.Button5Down,
+                _ => default
+            };
+
+            interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
+        }
+        else
+        {
+            var stroke = stackalloc Stroke[1];
+            stroke->Key = ToKeyStroke(key, true);
+
+            interception_send(keyboardContext, keyboardDeviceID, stroke, 1);
         }
     }
 
-    public static void MouseScroll(int deviceID, short rolling)
+    public static void ScrollMouse(short rolling)
     {
-        var stroke = new Stroke();
-        stroke.Mouse.State = MouseState.Wheel;
-        stroke.Mouse.Rolling = rolling;
-        interception_send(mouseContext, deviceID, &stroke, 1);
+        var stroke = stackalloc MouseStroke[1];
+        stroke->State = MouseState.Wheel;
+        stroke->Rolling = rolling;
+
+        interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
     }
 
-    public static void MouseScroll(short rolling) => MouseScroll(mouseDeviceID, rolling);
-
-    public static void MouseMove(int deviceID, int x, int y)
+    public static void MoveMouse(int x, int y)
     {
-        var stroke = new Stroke();
-        stroke.Mouse.X = x;
-        stroke.Mouse.Y = y;
-        stroke.Mouse.Flags = MouseFlag.MoveRelative;
-        interception_send(mouseContext, deviceID, &stroke, 1);
+        var stroke = stackalloc MouseStroke[1];
+        stroke->X = x;
+        stroke->Y = y;
+        stroke->Flags = MouseFlag.MoveRelative;
+
+        interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
     }
 
-    public static void MouseSet(int deviceID, int x, int y)
+    public static void SetMouse(int x, int y)
     {
-        var stroke = new Stroke();
-        stroke.Mouse.X = x;
-        stroke.Mouse.Y = y;
-        stroke.Mouse.Flags = MouseFlag.MoveAbsolute;
-        interception_send(mouseContext, deviceID, &stroke, 1);
+        var stroke = stackalloc MouseStroke[1];
+        stroke->X = x;
+        stroke->Y = y;
+        stroke->Flags = MouseFlag.MoveAbsolute;
+
+        interception_send(mouseContext, mouseDeviceID, (Stroke*)stroke, 1);
     }
-
-    public static void MouseMove(int x, int y) => MouseMove(mouseDeviceID, x, y);
-
-    public static void MouseSet(int x, int y) => MouseSet(mouseDeviceID, x, y);
 }
