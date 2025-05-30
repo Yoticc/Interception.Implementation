@@ -167,7 +167,7 @@ public static unsafe class InterceptionImpl
     static void SetKeyIsDown(int key) => keyStates[key / 64] |= 1L << (key % 64);
 
     static void SetKeyIsUp(Key key) => SetKeyIsUp((int)key);
-    static void SetKeyIsUp(int key) => keyStates[key / 64] &= ~(1 << (key % 64));
+    static void SetKeyIsUp(int key) => keyStates[key / 64] &= ~(1L << (key % 64));
 
     static Key ToKey(KeyStroke* keyStroke)
     {
@@ -240,7 +240,7 @@ public static unsafe class InterceptionImpl
     }
 
     public static bool IsKeyDown(Key key) => IsKeyDown((int)key);
-    static bool IsKeyDown(int key) => (keyStates[key / 64] & (1 << (key % 64))) != 0;
+    static bool IsKeyDown(int key) => (keyStates[key / 64] & (1L << (key % 64))) != 0;
 
     public static bool IsKeyUp(Key key) => !IsKeyDown(key);
 
